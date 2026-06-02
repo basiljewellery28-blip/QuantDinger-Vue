@@ -78,6 +78,124 @@
       </div>
     </a-card>
 
+    <!-- HFT Real-Time Metrics Collapsible Panel -->
+    <a-card
+      v-if="isHftBot"
+      :bordered="false"
+      class="hft-metrics-card"
+      style="margin-top: 12px;"
+    >
+      <div class="hft-header" @click="toggleHftVisibility">
+        <div class="hft-title">
+          <a-icon type="dashboard" />
+          <span>{{ $t('trading-bot.hft.title') || 'HFT Real-Time Metrics' }}</span>
+          <a-tag color="cyan" size="small" style="margin-left: 8px;">L2 LOB</a-tag>
+        </div>
+        <div class="hft-toggle">
+          <a-button type="link" size="small">
+            <a-icon :type="hftVisible ? 'up' : 'down'" />
+            {{ hftVisible ? ($t('trading-bot.hft.minimize') || 'Minimize') : ($t('trading-bot.hft.expand') || 'Expand') }}
+          </a-button>
+        </div>
+      </div>
+
+      <div v-show="hftVisible" class="hft-content">
+        <div class="hft-grid">
+          <!-- Avellaneda-Stoikov Card -->
+          <div class="hft-card avellaneda-card">
+            <div class="hft-card-title">
+              <a-icon type="sliders" />
+              <span>Avellaneda-Stoikov Bands</span>
+            </div>
+            <div class="hft-card-body">
+              <div class="metric-row">
+                <span class="metric-label">Mid Price</span>
+                <span class="metric-value">{{ formatPrice(midPrice) }}</span>
+              </div>
+              <div class="metric-row highlight-row">
+                <span class="metric-label">Reservation Price (r)</span>
+                <span class="metric-value res-price-val">{{ formatPrice(hftParams.reservationPrice) }}</span>
+              </div>
+              <div class="band-visualization">
+                <div class="band-line ask-line">
+                  <span class="band-label">Ask Band (Sell)</span>
+                  <span class="band-val">{{ formatPrice(hftParams.askBand) }}</span>
+                </div>
+                <div class="band-mid-dot" :style="{ left: reservationDotOffset + '%' }"></div>
+                <div class="band-line bid-line">
+                  <span class="band-label">Bid Band (Buy)</span>
+                  <span class="band-val">{{ formatPrice(hftParams.bidBand) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- VPIN Toxicity Card -->
+          <div class="hft-card vpin-card" :class="{ 'toxic-warning': hftParams.vpinCdf >= 0.8 }">
+            <div class="hft-card-title">
+              <a-icon type="alert" />
+              <span>Volume Toxicity (VPIN)</span>
+              <a-tag v-if="hftParams.vpinCdf >= 0.8" color="red" size="small" class="pulse-tag">TOXIC FLOW</a-tag>
+            </div>
+            <div class="hft-card-body">
+              <div class="metric-row">
+                <span class="metric-label">Rolling VPIN</span>
+                <span class="metric-value">{{ hftParams.vpin !== null ? hftParams.vpin.toFixed(4) : '-' }}</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label">VPIN CDF Percentile</span>
+                <span class="metric-value" :class="{ 'warning-text': hftParams.vpinCdf >= 0.8 }">
+                  {{ hftParams.vpinCdf !== null ? (hftParams.vpinCdf * 100).toFixed(2) + '%' : '-' }}
+                </span>
+              </div>
+              <!-- Premium Progress Bar -->
+              <div class="vpin-progress-container">
+                <div 
+                  class="vpin-progress-bar" 
+                  :style="{ width: (hftParams.vpinCdf * 100) + '%' }"
+                  :class="{ 'bar-danger': hftParams.vpinCdf >= 0.8 }"
+                ></div>
+              </div>
+              <div class="vpin-footer">
+                <span v-if="hftParams.vpinCdf >= 0.8" class="warning-desc">
+                  <a-icon type="warning" /> Order flow is highly toxic. Scaling position sizes by 50%.
+                </span>
+                <span v-else class="normal-desc">
+                  Order flow toxicity within safe limits.
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Order Flow Imbalance (OFI) Card -->
+          <div class="hft-card ofi-card">
+            <div class="hft-card-title">
+              <a-icon type="swap" />
+              <span>Order Flow Imbalance</span>
+            </div>
+            <div class="hft-card-body">
+              <div class="ofi-metric">
+                <div class="ofi-value-container">
+                  <div class="ofi-indicator" :class="ofiDirectionClass">
+                    <a-icon :type="ofiIndicatorIcon" />
+                  </div>
+                  <div class="ofi-large-val" :class="ofiTextClass">
+                    {{ hftParams.ofi !== null ? (hftParams.ofi > 0 ? '+' : '') + hftParams.ofi.toFixed(0) : '-' }}
+                  </div>
+                </div>
+                <div class="ofi-momentum-label">
+                  Net L2 LOB Imbalance (Units)
+                </div>
+              </div>
+              <div class="ofi-footer-desc">
+                {{ ofiExplanation }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a-card>
+
     <a-card :bordered="false" class="detail-tabs-card" style="margin-top: 12px;">
       <a-tabs v-model="activeTab" :animated="false">
         <!-- 参数 Tab -->
@@ -381,7 +499,8 @@ export default {
     return {
       activeTab: 'params',
       klineData: [],
-      klineLoading: false
+      klineLoading: false,
+      hftVisible: localStorage.getItem('qd_hft_visible') !== 'false'
     }
   },
   computed: {
@@ -551,6 +670,65 @@ export default {
     exchangeName () {
       const id = this.bot?.exchange_config?.exchange_id
       return { binance: 'Binance', bybit: 'Bybit', gate: 'Gate.io', okx: 'OKX', htx: 'HTX' }[id] || id
+    },
+    hftParams () {
+      const state = (this.tc.script_runtime_state || {}).params || {}
+      return {
+        vpin: state.vpin !== undefined ? parseFloat(state.vpin) : null,
+        vpinCdf: state.vpin_cdf !== undefined ? parseFloat(state.vpin_cdf) : null,
+        ofi: state.ofi !== undefined ? parseFloat(state.ofi) : null,
+        reservationPrice: state.reservation_price !== undefined ? parseFloat(state.reservation_price) : null,
+        bidBand: state.bid_band !== undefined ? parseFloat(state.bid_band) : null,
+        askBand: state.ask_band !== undefined ? parseFloat(state.ask_band) : null,
+        prevPrice: state.prev_price !== undefined ? parseFloat(state.prev_price) : null
+      }
+    },
+    isHftBot () {
+      const strategyName = String(this.bot?.strategy_name || '').toLowerCase()
+      const isHftName = strategyName.includes('vpin') || strategyName.includes('toxic') || strategyName.includes('scalper')
+      const hasHftParams = this.hftParams.vpin !== null || this.hftParams.ofi !== null
+      return isHftName || hasHftParams
+    },
+    midPrice () {
+      const state = (this.tc.script_runtime_state || {}).params || {}
+      const bid = parseFloat(state.last_bid_price)
+      const ask = parseFloat(state.last_ask_price)
+      if (bid > 0 && ask > 0) {
+        return (bid + ask) / 2
+      }
+      return parseFloat(state.prev_price) || parseFloat(this.bot?.prev_price) || 0
+    },
+    reservationDotOffset () {
+      const { reservationPrice, bidBand, askBand } = this.hftParams
+      if (reservationPrice && bidBand && askBand && askBand > bidBand) {
+        const offset = ((reservationPrice - bidBand) / (askBand - bidBand)) * 100
+        return Math.max(0, Math.min(100, offset))
+      }
+      return 50
+    },
+    ofiDirectionClass () {
+      const ofi = this.hftParams.ofi
+      if (ofi > 0) return 'ofi-up'
+      if (ofi < 0) return 'ofi-down'
+      return 'ofi-neutral'
+    },
+    ofiIndicatorIcon () {
+      const ofi = this.hftParams.ofi
+      if (ofi > 0) return 'arrow-up'
+      if (ofi < 0) return 'arrow-down'
+      return 'minus'
+    },
+    ofiTextClass () {
+      const ofi = this.hftParams.ofi
+      if (ofi > 0) return 'text-success'
+      if (ofi < 0) return 'text-danger'
+      return 'text-muted'
+    },
+    ofiExplanation () {
+      const ofi = this.hftParams.ofi
+      if (ofi > 0) return 'Positive imbalance: buying pressure is dominant at the best quotes.'
+      if (ofi < 0) return 'Negative imbalance: selling pressure is dominant at the best quotes.'
+      return 'Balanced order flow at the top of the book.'
     }
   },
   methods: {
@@ -727,6 +905,10 @@ export default {
           ctx.fillRect(cx - barW / 2, bTop, barW, bH)
         }
       })
+    },
+    toggleHftVisibility () {
+      this.hftVisible = !this.hftVisible
+      localStorage.setItem('qd_hft_visible', String(this.hftVisible))
     }
   },
   watch: {
@@ -915,5 +1097,337 @@ export default {
   .grid-line--buy .grid-line__price { color: #73d13d; }
   .grid-line--sell .grid-line__price { color: #ff4d4f; }
   .grid-line--mid .grid-line__price { color: #40a9ff; }
+}
+
+/* ===================== HFT Panel Styling ===================== */
+.hft-metrics-card {
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  border: 1px solid #f0f0f0;
+}
+.hft-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f0f0f0;
+  transition: opacity 0.2s;
+  
+  &:hover {
+    opacity: 0.85;
+  }
+  
+  .hft-title {
+    display: flex;
+    align-items: center;
+    font-size: 16px;
+    font-weight: 600;
+    color: #262626;
+    
+    .anticon {
+      margin-right: 8px;
+      color: #13c2c2;
+      font-size: 18px;
+    }
+  }
+}
+.hft-content {
+  padding-top: 16px;
+}
+.hft-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.hft-card {
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 16px;
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 180px;
+  
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  }
+}
+.hft-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #262626;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 12px;
+  
+  .anticon {
+    font-size: 15px;
+    color: #1890ff;
+  }
+}
+.hft-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  
+  .metric-label {
+    color: #8c8c8c;
+  }
+  .metric-value {
+    font-weight: 600;
+    color: #262626;
+    font-family: 'SF Mono','Monaco','Consolas',monospace;
+  }
+  
+  &.highlight-row {
+    background: rgba(24, 144, 255, 0.05);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+  }
+  
+  .res-price-val {
+    color: #1890ff;
+    font-weight: 700;
+  }
+}
+.band-visualization {
+  position: relative;
+  height: 60px;
+  margin-top: 15px;
+  background: transparent;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 26px;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: linear-gradient(to right, #52c41a, #1890ff, #f5222d);
+    border-radius: 3px;
+  }
+  
+  .band-mid-dot {
+    position: absolute;
+    top: 23px;
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border: 3px solid #1890ff;
+    border-radius: 50%;
+    transform: translateX(-50%);
+    box-shadow: 0 0 8px rgba(24, 144, 255, 0.8);
+    transition: left 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    z-index: 2;
+  }
+  
+  .ask-line {
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.2;
+    .band-label { font-size: 11px; color: #8c8c8c; }
+    .band-val { font-size: 12px; font-weight: 600; color: #f5222d; }
+  }
+  
+  .bid-line {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    line-height: 1.2;
+    .band-label { font-size: 11px; color: #8c8c8c; }
+    .band-val { font-size: 12px; font-weight: 600; color: #52c41a; }
+  }
+}
+.vpin-progress-container {
+  height: 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 12px 0 8px;
+  position: relative;
+}
+.vpin-progress-bar {
+  height: 100%;
+  background: linear-gradient(to right, #1890ff, #52c41a);
+  border-radius: 4px;
+  transition: width 0.5s ease-in-out;
+  
+  &.bar-danger {
+    background: linear-gradient(to right, #f5222d, #ff4d4f);
+  }
+}
+.vpin-footer {
+  margin-top: 4px;
+  
+  .warning-desc {
+    font-size: 11px;
+    color: #f5222d;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+    
+    .anticon {
+      font-size: 12px;
+      animation: pulseAlert 1s infinite alternate;
+    }
+  }
+  .normal-desc {
+    font-size: 11px;
+    color: #8c8c8c;
+  }
+}
+.ofi-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0;
+  
+  .ofi-value-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  
+  .ofi-indicator {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    transition: all 0.3s ease;
+    
+    &.ofi-up {
+      background: rgba(82, 196, 26, 0.15);
+      color: #52c41a;
+      box-shadow: 0 0 8px rgba(82, 196, 26, 0.3);
+    }
+    &.ofi-down {
+      background: rgba(245, 34, 45, 0.15);
+      color: #f5222d;
+      box-shadow: 0 0 8px rgba(245, 34, 45, 0.3);
+    }
+    &.ofi-neutral {
+      background: rgba(0, 0, 0, 0.05);
+      color: #8c8c8c;
+    }
+  }
+  
+  .ofi-large-val {
+    font-size: 32px;
+    font-weight: 700;
+    font-family: 'SF Mono','Monaco','Consolas',monospace;
+    line-height: 1;
+    
+    &.text-success { color: #52c41a; }
+    &.text-danger { color: #f5222d; }
+    &.text-muted { color: #8c8c8c; }
+  }
+  
+  .ofi-momentum-label {
+    font-size: 11px;
+    color: #8c8c8c;
+    margin-top: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+  }
+}
+.ofi-footer-desc {
+  font-size: 11px;
+  color: #8c8c8c;
+  text-align: center;
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+.toxic-warning {
+  border-color: rgba(245, 34, 45, 0.4) !important;
+  background: rgba(245, 34, 45, 0.02) !important;
+}
+
+.pulse-tag {
+  animation: hftPulse 2s infinite alternate;
+}
+
+@keyframes hftPulse {
+  0% { box-shadow: 0 0 0 0 rgba(245, 34, 45, 0.4); }
+  100% { box-shadow: 0 0 0 6px rgba(245, 34, 45, 0); }
+}
+
+@keyframes pulseAlert {
+  0% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+/* Dark Theme Overrides */
+.theme-dark {
+  .hft-metrics-card {
+    background: #1f1f1f;
+    border-color: #303030;
+  }
+  .hft-header {
+    border-bottom-color: #303030;
+    .hft-title {
+      color: #e8e8e8;
+    }
+  }
+  .hft-card {
+    background: #141414;
+    border-color: #303030;
+    color: #e8e8e8;
+    
+    &:hover {
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+  }
+  .hft-card-title {
+    color: #d9d9d9;
+    border-bottom-color: #303030;
+  }
+  .metric-label {
+    color: #8c8c8c;
+  }
+  .metric-value {
+    color: #e8e8e8;
+  }
+  .res-price-val {
+    color: #1890ff;
+  }
+  .vpin-progress-container {
+    background: #262626;
+  }
+  .ofi-indicator.ofi-neutral {
+    background: rgba(255, 255, 255, 0.08);
+    color: #8c8c8c;
+  }
+  .ofi-large-val.text-muted {
+    color: #8c8c8c;
+  }
 }
 </style>

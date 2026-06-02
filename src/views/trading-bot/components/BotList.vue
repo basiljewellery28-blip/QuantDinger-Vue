@@ -43,8 +43,8 @@
               <span class="meta-text">{{ budgetLabel(item) }}: {{ budgetText(item) }}</span>
             </div>
           </div>
-          <div class="bot-pnl" :class="{ positive: (item.unrealized_pnl || 0) >= 0, negative: (item.unrealized_pnl || 0) < 0 }">
-            {{ (item.unrealized_pnl || 0) >= 0 ? '+' : '' }}${{ (item.unrealized_pnl || 0).toFixed(2) }}
+          <div class="bot-pnl" :class="{ positive: (item.total_pnl || 0) >= 0, negative: (item.total_pnl || 0) < 0 }">
+            {{ (item.total_pnl || 0) >= 0 ? '+' : '-' }}{{ curSym }}{{ Math.abs(item.total_pnl || 0).toFixed(2) }}
           </div>
           <div class="bot-status-badge">
             <span :class="['dot', item.status || 'stopped']"></span>
@@ -107,7 +107,8 @@ export default {
     bots: { type: Array, default: () => [] },
     loading: { type: Boolean, default: false },
     selectedId: { type: [Number, String], default: null },
-    actionLoadingId: { type: [Number, String], default: null }
+    actionLoadingId: { type: [Number, String], default: null },
+    accountCurrency: { type: String, default: 'USD' }
   },
   data () {
     return {
@@ -116,6 +117,10 @@ export default {
     }
   },
   computed: {
+    curSym () {
+      const map = { USD: '$', EUR: '€', GBP: '£', ZAR: 'R', JPY: '¥', AUD: 'A$', CAD: 'C$' }
+      return map[this.accountCurrency] || (this.accountCurrency + ' ')
+    },
     filteredBots () {
       let list = this.bots
       if (this.searchText) {
@@ -165,7 +170,7 @@ export default {
       if (val === null || val === undefined || val === '') return ''
       const n = Number(val)
       if (!Number.isFinite(n)) return ''
-      return `${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+      return `${this.curSym}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     }
   }
 }

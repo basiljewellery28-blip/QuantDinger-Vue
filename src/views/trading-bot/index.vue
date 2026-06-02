@@ -63,6 +63,7 @@
           :loading="loading"
           :selectedId="selectedBot ? selectedBot.id : null"
           :actionLoadingId="actionLoadingId"
+          :accountCurrency="(account && account.currency) || 'USD'"
           @select="handleViewDetail"
           @start="handleStartBot"
           @stop="handleStopBot"
@@ -119,7 +120,7 @@
 
 <script>
 import { baseMixin } from '@/store/app-mixin'
-import { getStrategyList, startStrategy, stopStrategy, deleteStrategy, createStrategy } from '@/api/strategy'
+import { getStrategyList, startStrategy, stopStrategy, deleteStrategy, createStrategy, getAccountAllocation } from '@/api/strategy'
 import { getUserInfo } from '@/api/login'
 import BotTypeCards from './components/BotTypeCards.vue'
 import BotCreateWizard from './components/BotCreateWizard.vue'
@@ -143,7 +144,8 @@ export default {
       actionLoadingId: null,
       showAiDialog: false,
       aiPreset: null,
-      editingBot: null
+      editingBot: null,
+      account: null
     }
   },
   computed: {
@@ -153,40 +155,49 @@ export default {
     wizardVisible () {
       return this.viewMode === 'create' || this.viewMode === 'edit'
     },
+    moneyFmt () {
+      // Format in the real ACCOUNT currency (MT5 => USD), not a hardcoded symbol.
+      const ccy = (this.account && this.account.currency) || 'USD'
+      const sym = { USD: '$', EUR: '€', GBP: '£', ZAR: 'R', JPY: '¥', AUD: 'A$', CAD: 'C$' }[ccy] || (ccy + ' ')
+      return (n) => sym + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    },
     kpiCards () {
       const list = this.bots || []
       const running = list.filter(s => s.status === 'running').length
       const total = list.length
-      let totalEquity = 0
-      let totalPnl = 0
-      list.forEach(s => {
-        totalEquity += (s.trading_config?.initial_capital) || 0
-        totalPnl += s.unrealized_pnl || 0
-      })
+      const acc = this.account || {}
+      const money = this.moneyFmt
+      // Real account equity is the single source of truth. Fall back to the sum of
+      // per-bot current_equity only if the live account isn't reachable.
+      const equity = acc.connected
+        ? Number(acc.equity || 0)
+        : list.reduce((s, b) => s + (Number(b.current_equity) || 0), 0)
+      // Real net P&L = realized + unrealized across the bots (was unrealized-only).
+      const totalPnl = list.reduce((s, b) => s + (Number(b.total_pnl) || 0), 0)
       return [
         {
-          label: this.$t('trading-bot.kpi.totalEquity'),
-          value: '$' + totalEquity.toLocaleString('en-US', { minimumFractionDigits: 2 }),
+          label: this.$t('trading-bot.kpi.accountEquity'),
+          value: money(equity),
           icon: 'wallet',
           color: '#1890ff'
         },
         {
           label: this.$t('trading-bot.kpi.totalPnl'),
-          value: (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2 }),
+          value: (totalPnl >= 0 ? '+' : '-') + money(Math.abs(totalPnl)),
           icon: 'rise',
           color: totalPnl >= 0 ? '#52c41a' : '#f5222d'
+        },
+        {
+          label: this.$t('trading-bot.kpi.allocated'),
+          value: money(acc.allocated || 0) + ' / ' + money(acc.available || 0),
+          icon: 'pie-chart',
+          color: '#13c2c2'
         },
         {
           label: this.$t('trading-bot.kpi.running'),
           value: `${running} / ${total}`,
           icon: 'robot',
           color: '#722ed1'
-        },
-        {
-          label: this.$t('trading-bot.kpi.stopped'),
-          value: String(total - running),
-          icon: 'pause-circle',
-          color: '#faad14'
         }
       ]
     }
@@ -199,6 +210,7 @@ export default {
       this.userId = 1
     }
     this.loadBots()
+    this.loadAllocation()
     const q = this.$route.query
     if (q.strategy_id) {
       this.$nextTick(() => {
@@ -208,6 +220,25 @@ export default {
           this.viewMode = 'detail'
         }
       })
+    }
+    // Real-time refresh. Without this the BotDetail HFT widgets (VPIN,
+    // OFI, AS bands, position size, ML p_adverse) freeze at whatever was
+    // loaded when the page was first opened, even as the backend keeps
+    // updating script_runtime_state.params every bar. We re-pull the
+    // strategy list every 5 s only while at least one bot is running, to
+    // avoid hammering the API when nothing is changing.
+    this._refreshTimer = setInterval(() => {
+      if (this.viewMode === 'create') return
+      const anyRunning = (this.bots || []).some(b => b && b.status === 'running')
+      if (!anyRunning && this.viewMode !== 'detail') return
+      this.loadBots()
+      this.loadAllocation()
+    }, 5000)
+  },
+  beforeDestroy () {
+    if (this._refreshTimer) {
+      clearInterval(this._refreshTimer)
+      this._refreshTimer = null
     }
   },
   methods: {
@@ -238,6 +269,15 @@ export default {
         this.bots = []
       } finally {
         this.loading = false
+      }
+    },
+    async loadAllocation () {
+      // Real account balance/equity + allocations, so the header reconciles to MT5.
+      try {
+        const res = await getAccountAllocation()
+        this.account = res?.data || null
+      } catch {
+        this.account = null
       }
     },
     handleSelectBotType (type) {

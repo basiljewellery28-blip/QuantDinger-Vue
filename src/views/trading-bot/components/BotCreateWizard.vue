@@ -433,7 +433,7 @@
 <script>
 import request from '@/utils/request'
 import { mapGetters } from 'vuex'
-import { createStrategy, updateStrategy } from '@/api/strategy'
+import { createStrategy, updateStrategy, fetchVpinScript, fetchPairsScript } from '@/api/strategy'
 import { listExchangeCredentials } from '@/api/credentials'
 import { getWatchlist, addWatchlist, searchSymbols } from '@/api/market'
 import { generateBotScript } from './botScriptTemplates'
@@ -441,6 +441,8 @@ import GridConfig from './configs/GridConfig.vue'
 import MartingaleConfig from './configs/MartingaleConfig.vue'
 import TrendConfig from './configs/TrendConfig.vue'
 import DCAConfig from './configs/DCAConfig.vue'
+import VpinConfig from './configs/VpinConfig.vue'
+import PairsConfig from './configs/PairsConfig.vue'
 
 const BOT_TYPE_MAP = {
   grid: {
@@ -462,6 +464,16 @@ const BOT_TYPE_MAP = {
     icon: 'fund',
     gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
     component: 'DCAConfig'
+  },
+  vpin_toxic_scalper: {
+    icon: 'thunderbolt',
+    gradient: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    component: 'VpinConfig'
+  },
+  pairs_trader: {
+    icon: 'swap',
+    gradient: 'linear-gradient(135deg, #30cfd0 0%, #330867 100%)',
+    component: 'PairsConfig'
   }
 }
 
@@ -473,7 +485,7 @@ const BOT_TYPE_MAP = {
 
 export default {
   name: 'BotCreateWizard',
-  components: { GridConfig, MartingaleConfig, TrendConfig, DCAConfig },
+  components: { GridConfig, MartingaleConfig, TrendConfig, DCAConfig, VpinConfig, PairsConfig },
   props: {
     botType: { type: String, required: true },
     aiPreset: { type: Object, default: null },
@@ -817,6 +829,31 @@ export default {
           this.baseForm.marketType = 'swap'
         }
       }
+    },
+    // When the wizard opens (or the brokerMarketPolicy snapshot finally
+    // arrives from Vuex), make sure baseForm.marketCategory is one this bot
+    // type actually supports. Without this, opening the VPIN wizard lands on
+    // the global default ("Crypto"), the credentials dropdown is filtered to
+    // Crypto-only brokers (excluding MT5), and the user sees an empty list
+    // with the orange "not supported on Crypto" warning even though VPIN's
+    // only supported market is Forex.
+    supportedMarketsForBot: {
+      immediate: true,
+      handler (set) {
+        if (!set || !set.size) return
+        if (set.has(this.baseForm.marketCategory)) return
+        // Pick the first supported market. Preference order matches the
+        // live_market_categories ordering (Crypto, USStock, Forex) so behavior
+        // is predictable across bot types.
+        const live = (this.brokerMarketPolicy && this.brokerMarketPolicy.live_market_categories) || ['Crypto', 'USStock', 'Forex']
+        const target = live.find(m => set.has(m)) || Array.from(set)[0]
+        if (target && target !== this.baseForm.marketCategory) {
+          this.baseForm.marketCategory = target
+          // Re-run the dependent-field reset that the @change handler does
+          // when the user picks the radio manually.
+          this.$nextTick(() => this.handleMarketCategoryChange())
+        }
+      }
     }
   },
   created () {
@@ -978,6 +1015,19 @@ export default {
       return next
     },
     resolveTradeDirection (params) {
+      // VPIN Toxic Scalper is an Avellaneda-Stoikov market maker: it must
+      // quote both sides of the book to function. It only runs on Forex via
+      // MT5 (per BOT_TYPE_MARKETS), where the broker is intrinsically
+      // bidirectional even though the policy labels market_type as 'spot'.
+      // The trading_executor (app/services/trading_executor.py) carves out
+      // the Forex+spot+short case, so a `both` direction is honoured. Without
+      // this early-return, the spot branch below would force-long the
+      // strategy and all short signals would be dropped.
+      if (this.botType === 'vpin_toxic_scalper') return 'both'
+      // Pairs Trader is bidirectional by design: it fades the spread, going
+      // long the primary when z is deeply negative and short when z is deeply
+      // positive. Same Forex+spot carve-out applies as VPIN.
+      if (this.botType === 'pairs_trader') return 'both'
       if (this.baseForm.marketType === 'spot') return 'long'
       if (this.isCurrentBrokerLongOnly()) return 'long'
       if (this.botType === 'grid') {
@@ -1296,9 +1346,50 @@ export default {
         scriptParams._initialCapital = this.baseForm.initialCapital
       }
       const effectiveTimeframe = this.isGridOrMartingaleBot ? '1m' : this.baseForm.timeframe
-      const strategyCode = generateBotScript(this.botType, scriptParams, {
-        timeframe: effectiveTimeframe
-      })
+      // VPIN Toxic Scalper's strategy_code lives in the backend
+      // (app/services/bot_scripts/vpin_toxic_scalper_template.py) and is
+      // exposed via /api/bots/vpin-toxic-scalper-script. Fetching it instead
+      // of generating client-side keeps the AS+VPIN+OFI logic source-of-truth
+      // in one place and lets backend updates roll out without rebuilding the
+      // frontend. Other bot types (grid/dca/martingale/trend) still build
+      // their script in JS via generateBotScript().
+      let strategyCode
+      if (this.botType === 'vpin_toxic_scalper') {
+        const resp = await fetchVpinScript()
+        // request() unwraps to { code, msg, data } — strategy_code is at data.script
+        const script = (resp && resp.data && resp.data.script) || (resp && resp.script) || ''
+        if (!script) {
+          throw new Error(this.$t('trading-bot.vpin.fetchScriptFailed'))
+        }
+        strategyCode = script
+        // Inject the trading symbol into strategyParams (not scriptParams).
+        // The payload at the bottom of buildPayload sends `strategyParams` as
+        // `bot_params`, which is what the script_runtime hydrates into
+        // ctx._params at run-start. scriptParams is only consumed by
+        // generateBotScript() for JS-template bots (grid/dca/...) and is
+        // unused for VPIN since we fetched the script body from the backend.
+        // Writing to scriptParams here (the previous version) was a no-op for
+        // VPIN and caused the script's ctx._params.get("symbol") to miss,
+        // making it fall back to the hard-coded "EURUSD" default — which
+        // meant every VPIN bot (XAUUSD, GBPUSD, etc.) read EURUSD's LOB.
+        strategyParams.symbol = this.baseForm.symbol
+      } else if (this.botType === 'pairs_trader') {
+        // Pairs Trader is the same pattern: backend-hosted Python script
+        // (app/services/bot_scripts/pairs_trader_template.py) served via
+        // /api/bots/pairs-trader-script. We inject the primary symbol the
+        // same way VPIN does; symbolB is supplied by PairsConfig.vue.
+        const resp = await fetchPairsScript()
+        const script = (resp && resp.data && resp.data.script) || (resp && resp.script) || ''
+        if (!script) {
+          throw new Error(this.$t('trading-bot.pairs.fetchScriptFailed'))
+        }
+        strategyCode = script
+        strategyParams.symbol = this.baseForm.symbol
+      } else {
+        strategyCode = generateBotScript(this.botType, scriptParams, {
+          timeframe: effectiveTimeframe
+        })
+      }
       const leverage = this.baseForm.marketType === 'spot' ? 1 : (this.baseForm.leverage || 5)
       const tradeDirection = this.resolveTradeDirection(strategyParams)
 
@@ -1344,8 +1435,11 @@ export default {
           bot_type: this.botType,
           bot_params: strategyParams,
           // 马丁/趋势机器人依赖即时成交触发加仓/平仓,强制市价;
-          // 网格/DCA 保留用户选择(默认 maker 更省手续费)
-          order_mode: (this.botType === 'martingale' || this.botType === 'trend')
+          // VPIN scalper uses market orders too (the strategy script calls
+          // ctx.buy/ctx.sell which the executor routes as market via
+          // MT5Client.place_market_order — limit orders here would create a
+          // mismatch). Grid/DCA still default to maker for fee economy.
+          order_mode: (this.botType === 'martingale' || this.botType === 'trend' || this.botType === 'vpin_toxic_scalper' || this.botType === 'pairs_trader')
             ? 'market'
             : (strategyParams.orderMode || 'maker'),
           entry_trigger_mode: 'immediate'

@@ -106,6 +106,16 @@ export default {
           riskLabel: this.$t('trading-bot.risk.low'),
           riskClass: 'low',
           scene: this.$t('trading-bot.scene.longTerm')
+        },
+        {
+          key: 'vpin_toxic_scalper',
+          name: this.$t('trading-bot.type.vpin_toxic_scalper'),
+          desc: this.$t('trading-bot.type.vpin_toxic_scalperDesc'),
+          icon: 'thunderbolt',
+          gradient: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+          riskLabel: this.$t('trading-bot.risk.high'),
+          riskClass: 'high',
+          scene: this.$t('trading-bot.scene.hft')
         }
       ]
       // Tag each card with the markets it supports so the parent (or the

@@ -26,7 +26,47 @@ const api = {
   logs: '/api/strategies/logs',
   backtest: '/api/strategies/backtest',
   backtestHistory: '/api/strategies/backtest/history',
-  backtestGet: '/api/strategies/backtest/get'
+  backtestGet: '/api/strategies/backtest/get',
+  // Canonical bot-strategy script endpoints (returned by /api/bots/<type>-script).
+  // Used by the wizard for bot types whose code comes from the backend (e.g.
+  // VPIN Toxic Scalper) rather than a JS template like grid/dca/martingale/trend.
+  vpinScript: '/api/bots/vpin-toxic-scalper-script',
+  pairsScript: '/api/bots/pairs-trader-script',
+  // Real account balance/equity + capital allocated to running bots + free.
+  strategyAllocation: '/api/strategies/allocation'
+}
+
+/**
+ * Real MT5 account balance/equity, capital already allocated to running bots,
+ * and what's free to allocate. Drives the account-aware Trading Bots header and
+ * the bot-creation hard cap so equity/PnL reconcile to the real account.
+ */
+export function getAccountAllocation () {
+  return request({
+    url: api.strategyAllocation,
+    method: 'get'
+  })
+}
+
+/**
+ * Fetch the canonical VPIN Toxic Scalper script body from the backend.
+ * Returns the strategy_code string that should go into the create payload.
+ */
+export function fetchVpinScript () {
+  return request({
+    url: api.vpinScript,
+    method: 'get'
+  })
+}
+
+/**
+ * Fetch the canonical Pairs Trader script body from the backend.
+ */
+export function fetchPairsScript () {
+  return request({
+    url: api.pairsScript,
+    method: 'get'
+  })
 }
 
 /**
