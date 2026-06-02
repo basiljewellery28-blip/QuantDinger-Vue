@@ -912,9 +912,15 @@ export default {
     }
   },
   watch: {
-    bot () {
-      this.activeTab = 'params'
-      this.klineData = []
+    // Only reset the tab/kline when a DIFFERENT bot is selected. The parent
+    // refreshes selectedBot every 5s for live data (HFT metrics, P&L); that
+    // reassigns this `bot` prop to a new object with the SAME id, and resetting
+    // on it would snap the user back to Parameters every 5s (the tab-loop bug).
+    bot (newBot, oldBot) {
+      if (!oldBot || !newBot || newBot.id !== oldBot.id) {
+        this.activeTab = 'params'
+        this.klineData = []
+      }
     },
     activeTab (val) {
       if (val === 'gridPreview' && this.isGridBot && !this.klineData.length) {
