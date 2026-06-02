@@ -256,6 +256,8 @@ const locale = {
   'trading-bot.wizard.spot': 'Spot',
   'trading-bot.wizard.leverage': 'Leverage',
   'trading-bot.wizard.initialCapital': 'Initial Capital',
+  'trading-bot.wizard.availableToAllocate': 'Available to allocate: {available} (account balance {balance})',
+  'trading-bot.wizard.capitalOverAvailable': 'Exceeds available {available} on your account — lower it or stop another bot.',
   'trading-bot.wizard.testConnection': 'Test Connection',
   'trading-bot.wizard.connected': 'Connected',
   'trading-bot.wizard.connectFail': 'Connection Failed',

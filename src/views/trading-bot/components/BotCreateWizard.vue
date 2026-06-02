@@ -188,8 +188,11 @@
               :min="10"
               :step="100"
               style="width: 100%"
-              placeholder="USDT"
+              :placeholder="(account && account.currency) || 'USD'"
             />
+            <div v-if="account && account.connected" class="form-hint">
+              {{ $t('trading-bot.wizard.availableToAllocate', { available: fmtCcy(account.available), balance: fmtCcy(account.balance) }) }}
+            </div>
             <div v-if="botType === 'martingale'" class="form-hint">{{ martingaleBudgetHint }}</div>
           </a-form-model-item>
 
@@ -433,7 +436,7 @@
 <script>
 import request from '@/utils/request'
 import { mapGetters } from 'vuex'
-import { createStrategy, updateStrategy, fetchVpinScript, fetchPairsScript } from '@/api/strategy'
+import { createStrategy, updateStrategy, fetchVpinScript, fetchPairsScript, getAccountAllocation } from '@/api/strategy'
 import { listExchangeCredentials } from '@/api/credentials'
 import { getWatchlist, addWatchlist, searchSymbols } from '@/api/market'
 import { generateBotScript } from './botScriptTemplates'
@@ -519,8 +522,19 @@ export default {
         marketCategory: [{ required: true, message: this.$t('trading-bot.wizard.marketCategory'), trigger: 'change' }],
         credentialId: [{ required: true, message: this.$t('trading-bot.wizard.credentialReq'), trigger: 'change' }],
         symbol: [{ required: true, message: this.$t('trading-bot.wizard.symbolReq'), trigger: 'change' }],
-        initialCapital: [{ required: true, type: 'number', min: 10, message: this.$t('trading-bot.wizard.capitalReq'), trigger: 'change' }]
+        initialCapital: [
+          { required: true, type: 'number', min: 10, message: this.$t('trading-bot.wizard.capitalReq'), trigger: 'change' },
+          { validator: (rule, value, cb) => {
+              // Hard cap (mirrors the backend): a NEW bot can't allocate more than
+              // what's free on the real account. Editing is governed server-side.
+              const acc = this.account
+              if (acc && acc.connected && !this.editBot && Number(value) > Number(acc.available || 0) + 1e-6) {
+                cb(new Error(this.$t('trading-bot.wizard.capitalOverAvailable', { available: this.fmtCcy(acc.available || 0) })))
+              } else { cb() }
+            }, trigger: 'change' }
+        ]
       },
+      account: null,
       strategyParams: {},
       riskForm: {
         stopLossPct: 10,
@@ -864,6 +878,7 @@ export default {
       this.applyAiPreset()
     }
     this.loadWatchlist()
+    this.loadAccount()
   },
   beforeDestroy () {
     if (this.addSearchTimer) {
@@ -872,6 +887,21 @@ export default {
     }
   },
   methods: {
+    async loadAccount () {
+      // Live MT5 balance/allocated/available so the capital field can show the
+      // real free amount and cap input (backend enforces the same hard cap).
+      try {
+        const res = await getAccountAllocation()
+        this.account = res?.data || null
+      } catch {
+        this.account = null
+      }
+    },
+    fmtCcy (n) {
+      const ccy = (this.account && this.account.currency) || 'USD'
+      const sym = { USD: '$', EUR: '€', GBP: '£', ZAR: 'R', JPY: '¥', AUD: 'A$', CAD: 'C$' }[ccy] || (ccy + ' ')
+      return sym + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    },
     shouldShowStrategyParam (key) {
       if (key === 'referencePrice') return this.botType === 'grid'
       // Hide the trailing TP activation / callback details on the confirm
