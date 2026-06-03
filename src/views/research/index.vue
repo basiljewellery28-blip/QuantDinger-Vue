@@ -73,24 +73,49 @@
           </div>
         </a-card>
       </template>
+
+      <!-- ===== Study 3: Liquid-hours seasonality (CKS intraday) ===== -->
+      <a-divider />
+      <a-card :bordered="false" class="exp-card">
+        <div class="exp-title">{{ hoursTitle }}</div>
+        <div class="exp-hyp">{{ hoursHyp }}</div>
+        <a-tag v-if="hours.status === 'ready'" :color="(hours.oos && hours.oos.helps) ? 'green' : 'red'" class="verdict">{{ hours.verdict }}</a-tag>
+      </a-card>
+      <template v-if="hours.status === 'ready'">
+        <a-row :gutter="16" class="kpis">
+          <a-col :span="6"><a-card><a-statistic title="TEST net — all hours" :value="hours.oos.net_test_all" prefix="$" /></a-card></a-col>
+          <a-col :span="6"><a-card><a-statistic title="TEST net — good hours (OOS)" :value="hours.oos.net_test_filtered" prefix="$" /></a-card></a-col>
+          <a-col :span="6"><a-card><a-statistic title="OOS improvement" :value="hours.oos.improvement" prefix="$" /></a-card></a-col>
+          <a-col :span="6"><a-card><a-statistic title="Good hours kept" :value="hours.oos.trades_test_kept" :suffix="'/ ' + hours.oos.trades_test_all + ' trd'" /></a-card></a-col>
+        </a-row>
+        <a-card :bordered="false" class="chart-card" title="Strategy net P&L by hour-of-day (XAUUSD) — in-sample">
+          <div ref="hoursChart" class="scatter"></div>
+          <div class="chart-note">
+            Green = profitable hour, red = losing. The OOS test picks good hours on train and applies them to
+            test — here the gain is marginal and still a loss, so the hour pattern is mostly noise (not tradeable).
+          </div>
+        </a-card>
+      </template>
     </a-spin>
   </div>
 </template>
 
 <script>
 import * as echarts from 'echarts'
-import { getOfiStudy, getCostStudy } from '@/api/research'
+import { getOfiStudy, getCostStudy, getHoursStudy } from '@/api/research'
 
 export default {
   name: 'Research',
   data () {
-    return { loading: true, study: {}, cost: {}, chart: null, costChart: null, timer: null }
+    return { loading: true, study: {}, cost: {}, hours: {}, chart: null, costChart: null, hoursChart: null, timer: null }
   },
   computed: {
     expTitle () { return (this.study.experiment && this.study.experiment.title) || 'OFI → price impact (Cont-Kukanov-Stoikov 2014)' },
     expHyp () { return (this.study.experiment && this.study.experiment.hypothesis) || 'ΔP ≈ β·OFI — does it hold on our XAUUSD L2 feed?' },
     costTitle () { return (this.cost.experiment && this.cost.experiment.title) || 'Cost vs Edge — A-S band floor (To-Try #5)' },
-    costHyp () { return (this.cost.experiment && this.cost.experiment.hypothesis) || '' }
+    costHyp () { return (this.cost.experiment && this.cost.experiment.hypothesis) || '' },
+    hoursTitle () { return (this.hours.experiment && this.hours.experiment.title) || 'Liquid-hours seasonality (CKS intraday)' },
+    hoursHyp () { return (this.hours.experiment && this.hours.experiment.hypothesis) || '' }
   },
   mounted () {
     this.load()
@@ -101,12 +126,13 @@ export default {
     if (this.timer) clearInterval(this.timer)
     if (this.chart) this.chart.dispose()
     if (this.costChart) this.costChart.dispose()
+    if (this.hoursChart) this.hoursChart.dispose()
     window.removeEventListener('resize', this.resize)
   },
   methods: {
     pct (v) { return v == null ? 0 : Math.round(v * 1000) / 10 },
     r2Style (v) { return { color: (v >= 0.05) ? '#3f8600' : '#cf1322' } },
-    resize () { if (this.chart) this.chart.resize(); if (this.costChart) this.costChart.resize() },
+    resize () { if (this.chart) this.chart.resize(); if (this.costChart) this.costChart.resize(); if (this.hoursChart) this.hoursChart.resize() },
     load () {
       getOfiStudy().then(res => {
         this.study = (res && res.data) ? res.data : (res || {})
@@ -117,6 +143,26 @@ export default {
         this.cost = (res && res.data) ? res.data : (res || {})
         this.$nextTick(this.renderCostChart)
       }).catch(() => {})
+      getHoursStudy().then(res => {
+        this.hours = (res && res.data) ? res.data : (res || {})
+        this.$nextTick(this.renderHoursChart)
+      }).catch(() => {})
+    },
+    renderHoursChart () {
+      if (this.hours.status !== 'ready' || !this.$refs.hoursChart) return
+      if (!this.hoursChart) this.hoursChart = echarts.init(this.$refs.hoursChart)
+      const bh = this.hours.by_hour || []
+      this.hoursChart.setOption({
+        grid: { left: 60, right: 30, top: 20, bottom: 50 },
+        tooltip: { trigger: 'axis', formatter: p => `h${p[0].axisValue}<br/>net $${p[0].data}` },
+        xAxis: { name: 'hour-of-day', nameLocation: 'middle', nameGap: 30, type: 'category', data: bh.map(r => r.hour) },
+        yAxis: { name: 'net P&L ($)', type: 'value' },
+        series: [{
+          type: 'bar',
+          data: bh.map(r => ({ value: r.net, itemStyle: { color: r.net >= 0 ? '#3f8600' : '#cf1322' } })),
+          markLine: { data: [{ yAxis: 0 }], silent: true, lineStyle: { color: '#aaa' } }
+        }]
+      })
     },
     renderCostChart () {
       if (this.cost.status !== 'ready' || !this.$refs.costChart) return
