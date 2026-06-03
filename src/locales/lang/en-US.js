@@ -41,6 +41,7 @@ const locale = {
   'menu.dashboard.backtestCenter': 'Backtest Center',
   'menu.dashboard.indicatorIde': 'Indicator IDE',
   'menu.dashboard.tradingBot': 'Trading Bot',
+  'menu.dashboard.research': 'Research Lab',
   'menu.dashboard.brokerAccounts': 'Live Broker Accounts',
   'menu.dashboard.scriptStrategies': 'Python Script Strategies',
   // ---- Trading Bot Page ----

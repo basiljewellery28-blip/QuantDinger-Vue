@@ -78,6 +78,13 @@ export const asyncRouterMap = [
         redirect: '/strategy-live',
         hidden: true
       },
+      // Research Lab — visual, on-platform quant research wired to the brain
+      {
+        path: '/research',
+        name: 'Research',
+        component: () => import('@/views/research'),
+        meta: { title: 'menu.dashboard.research', keepAlive: true, icon: 'experiment', permission: ['dashboard'] }
+      },
       // 5. 交易机器人（实盘运维监控）
       {
         path: '/trading-bot',
