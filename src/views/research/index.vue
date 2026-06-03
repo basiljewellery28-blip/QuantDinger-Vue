@@ -16,7 +16,7 @@
         <div class="exp-hyp">{{ expHyp }}</div>
         <div class="exp-meta">
           <a-tag color="purple">Source: {{ study.source || 'bot 12 live OFI (L2 LOB)' }}</a-tag>
-          <a-tag v-if="study.status === 'ready'" :color="study.predictive ? 'green' : 'red'" class="verdict">
+          <a-tag v-if="study.status === 'ready'" :color="study.verdict_level || 'red'" class="verdict">
             {{ study.verdict }}
           </a-tag>
           <a-tag v-else color="blue">Collecting live data…</a-tag>
@@ -50,6 +50,35 @@
       </a-card>
 
       <a-empty v-else description="Collecting live OFI + price… check back shortly." style="margin-top: 60px" />
+
+      <!-- ===== Study 1b: SAME OFI test on a REAL crypto L2 feed ===== -->
+      <a-card :bordered="false" class="exp-card" style="margin-top:16px">
+        <div class="exp-title">{{ cryptoOfiTitle }} <a-tag color="cyan">REAL L2</a-tag></div>
+        <div class="exp-hyp">{{ cryptoOfiHyp }}</div>
+        <div class="exp-meta">
+          <a-tag color="purple">Source: {{ cryptoOfi.source || 'real exchange L2 (ccxt)' }}</a-tag>
+          <a-tag v-if="cryptoOfi.status === 'ready'" :color="cryptoOfi.verdict_level || 'red'" class="verdict">{{ cryptoOfi.verdict }}</a-tag>
+          <a-tag v-else color="blue">Collecting real-L2 data…</a-tag>
+        </div>
+      </a-card>
+      <template v-if="cryptoOfi.status === 'ready'">
+        <a-row :gutter="16" class="kpis">
+          <a-col :span="4"><a-card><a-statistic title="Samples" :value="cryptoOfi.n" /></a-card></a-col>
+          <a-col :span="4"><a-card><a-statistic title="OFI ≠ 0 rate" :value="cryptoOfi.ofi_nonzero_pct" suffix="%" /></a-card></a-col>
+          <a-col :span="4"><a-card><a-statistic title="Predictive R²" :value="pct(cryptoOfi.r2)" suffix="%" :value-style="r2Style(cryptoOfi.r2)" /></a-card></a-col>
+          <a-col :span="4"><a-card><a-statistic title="Contemp. R²" :value="pct(cryptoOfi.r2_contemp)" suffix="%" /></a-card></a-col>
+          <a-col :span="4"><a-card><a-statistic title="β" :value="cryptoOfi.beta" :precision="6" /></a-card></a-col>
+          <a-col :span="4"><a-card><a-statistic title="t-stat (β)" :value="cryptoOfi.t_beta" :precision="2" /></a-card></a-col>
+        </a-row>
+        <a-card :bordered="false" class="chart-card" title="OFI vs next-step Δprice — BTC/USDT REAL L2">
+          <div ref="cryptoScatter" class="scatter"></div>
+          <div class="chart-note">
+            Same CKS test, but on a genuine deep order book. If R² here &gt; the demo feed's ~0%, the demo's
+            synthetic L2 was the bottleneck — the microstructure/OFI method works when the data is real.
+          </div>
+        </a-card>
+      </template>
+      <a-empty v-else description="Collecting real crypto L2 OFI… (BTC/USDT, ~30s buckets)" style="margin-top: 40px" />
 
       <!-- ===== Study 2: Cost vs Edge (A-S band floor, To-Try #5) ===== -->
       <a-divider />
@@ -102,16 +131,18 @@
 
 <script>
 import * as echarts from 'echarts'
-import { getOfiStudy, getCostStudy, getHoursStudy } from '@/api/research'
+import { getOfiStudy, getOfiCryptoStudy, getCostStudy, getHoursStudy } from '@/api/research'
 
 export default {
   name: 'Research',
   data () {
-    return { loading: true, study: {}, cost: {}, hours: {}, chart: null, costChart: null, hoursChart: null, timer: null }
+    return { loading: true, study: {}, cryptoOfi: {}, cost: {}, hours: {}, chart: null, cryptoChart: null, costChart: null, hoursChart: null, timer: null }
   },
   computed: {
     expTitle () { return (this.study.experiment && this.study.experiment.title) || 'OFI → price impact (Cont-Kukanov-Stoikov 2014)' },
     expHyp () { return (this.study.experiment && this.study.experiment.hypothesis) || 'ΔP ≈ β·OFI — does it hold on our XAUUSD L2 feed?' },
+    cryptoOfiTitle () { return (this.cryptoOfi.experiment && this.cryptoOfi.experiment.title) || 'OFI → price impact on REAL L2' },
+    cryptoOfiHyp () { return (this.cryptoOfi.experiment && this.cryptoOfi.experiment.hypothesis) || 'Same CKS test on a real deep crypto book.' },
     costTitle () { return (this.cost.experiment && this.cost.experiment.title) || 'Cost vs Edge — A-S band floor (To-Try #5)' },
     costHyp () { return (this.cost.experiment && this.cost.experiment.hypothesis) || '' },
     hoursTitle () { return (this.hours.experiment && this.hours.experiment.title) || 'Liquid-hours seasonality (CKS intraday)' },
@@ -125,6 +156,7 @@ export default {
   beforeDestroy () {
     if (this.timer) clearInterval(this.timer)
     if (this.chart) this.chart.dispose()
+    if (this.cryptoChart) this.cryptoChart.dispose()
     if (this.costChart) this.costChart.dispose()
     if (this.hoursChart) this.hoursChart.dispose()
     window.removeEventListener('resize', this.resize)
@@ -132,13 +164,26 @@ export default {
   methods: {
     pct (v) { return v == null ? 0 : Math.round(v * 1000) / 10 },
     r2Style (v) { return { color: (v >= 0.05) ? '#3f8600' : '#cf1322' } },
-    resize () { if (this.chart) this.chart.resize(); if (this.costChart) this.costChart.resize(); if (this.hoursChart) this.hoursChart.resize() },
+    resize () { [this.chart, this.cryptoChart, this.costChart, this.hoursChart].forEach(c => { if (c) c.resize() }) },
+    scatterOption (pts, xName, yName) {
+      return {
+        grid: { left: 60, right: 30, top: 20, bottom: 50 },
+        tooltip: { trigger: 'item', formatter: p => `${xName} ${p.value[0]}<br/>${yName} ${p.value[1]}` },
+        xAxis: { name: xName, nameLocation: 'middle', nameGap: 30, type: 'value' },
+        yAxis: { name: yName, type: 'value' },
+        series: [{ type: 'scatter', symbolSize: 6, data: pts, itemStyle: { color: '#1890ff', opacity: 0.5 } }]
+      }
+    },
     load () {
       getOfiStudy().then(res => {
         this.study = (res && res.data) ? res.data : (res || {})
         this.loading = false
         this.$nextTick(this.renderChart)
       }).catch(() => { this.loading = false })
+      getOfiCryptoStudy().then(res => {
+        this.cryptoOfi = (res && res.data) ? res.data : (res || {})
+        this.$nextTick(this.renderCryptoChart)
+      }).catch(() => {})
       getCostStudy().then(res => {
         this.cost = (res && res.data) ? res.data : (res || {})
         this.$nextTick(this.renderCostChart)
@@ -185,13 +230,13 @@ export default {
       if (this.study.status !== 'ready' || !this.$refs.scatter) return
       if (!this.chart) this.chart = echarts.init(this.$refs.scatter)
       const pts = (this.study.scatter || []).map(p => [p.ofi, p.dp])
-      this.chart.setOption({
-        grid: { left: 60, right: 30, top: 20, bottom: 50 },
-        tooltip: { trigger: 'item', formatter: p => `OFI ${p.value[0]}<br/>Δp ${p.value[1]}` },
-        xAxis: { name: 'OFI (net L2 imbalance)', nameLocation: 'middle', nameGap: 30, type: 'value' },
-        yAxis: { name: 'Δ price next bar ($)', type: 'value' },
-        series: [{ type: 'scatter', symbolSize: 6, data: pts, itemStyle: { color: '#1890ff', opacity: 0.5 } }]
-      })
+      this.chart.setOption(this.scatterOption(pts, 'OFI (net L2 imbalance)', 'Δ price next bar ($)'))
+    },
+    renderCryptoChart () {
+      if (this.cryptoOfi.status !== 'ready' || !this.$refs.cryptoScatter) return
+      if (!this.cryptoChart) this.cryptoChart = echarts.init(this.$refs.cryptoScatter)
+      const pts = (this.cryptoOfi.scatter || []).map(p => [p.ofi, p.dp])
+      this.cryptoChart.setOption(this.scatterOption(pts, 'OFI (real L2)', 'Δ mid next step ($)'))
     }
   }
 }

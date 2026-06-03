@@ -3,6 +3,7 @@ import request from '@/utils/request'
 // Research API — surfaces our quant research (the "brain") on-platform.
 const api = {
   ofi: '/api/research/ofi',
+  ofiCrypto: '/api/research/ofi_crypto',
   cost: '/api/research/cost',
   hours: '/api/research/hours'
 }
@@ -11,6 +12,14 @@ const api = {
 export function getOfiStudy () {
   return request({
     url: api.ofi,
+    method: 'get'
+  })
+}
+
+// Same CKS OFI study on a REAL crypto L2 feed (BTC/USDT) — synthetic-vs-real test.
+export function getOfiCryptoStudy () {
+  return request({
+    url: api.ofiCrypto,
     method: 'get'
   })
 }
